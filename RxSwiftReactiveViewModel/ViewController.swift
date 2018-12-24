@@ -13,6 +13,42 @@ import SnapKit
 import MapKit
 import Overture
 
+struct Station {
+    var name: String
+    var docks: String
+    var location: CLLocation
+}
+
+struct Api {
+    var closestStations: (CLLocation) -> Observable<[Station]> = { location in
+        let station1 = Station(name: "Station 1", docks: "5", location: CLLocation.cibeles)
+        let station2 = Station(name: "Station 2", docks: "6", location: CLLocation.cibeles)
+        let station3 = Station(name: "Station 3", docks: "7", location: CLLocation.plazaMayor)
+        let result = Observable<[Station]>.create { (observer) -> Disposable in
+            observer.onNext([station1, station2, station3])
+            observer.onCompleted()
+            return Disposables.create()
+        }.delay(5.0, scheduler: MainScheduler.instance)
+        
+        return result
+    }
+}
+
+struct LocationManager {
+    var location: Observable<CLLocation> = {
+        Observable<CLLocation>.create { (observer) -> Disposable in
+            observer.onNext(CLLocation(latitude: 40.416691, longitude: -3.703264))
+            observer.onCompleted()
+            return Disposables.create()
+    }
+    }()
+}
+
+struct Enviroment {
+    var api = Api()
+    var date: () -> Date = { Date() }
+    var locationManager = LocationManager()
+}
 
 private let updatedDateFormatter = with(
     DateFormatter(),
@@ -24,8 +60,11 @@ private let updatedDateFormatter = with(
 
 extension CLLocation {
     static let madrid = CLLocation(latitude: 40.416691, longitude: -3.703264)
+    static let plazaMayor = CLLocation(latitude: 40.415665, longitude: -3.707187)
+    static let cibeles = CLLocation(latitude: 40.419264, longitude: -3.692928)
 }
 
+let env = Enviroment()
 
 class ViewController: UIViewController, MKMapViewDelegate {
 
@@ -34,12 +73,17 @@ class ViewController: UIViewController, MKMapViewDelegate {
     private lazy var mapView: MKMapView = {
         let view = MKMapView()
         view.showsUserLocation = true
+        let regionRadius: CLLocationDistance = 1000
+        let coordinateRegion = MKCoordinateRegion(center: CLLocation.madrid.coordinate,
+                                                  latitudinalMeters: regionRadius * 1.0, longitudinalMeters: regionRadius * 1.0)
+        view.setRegion(coordinateRegion, animated: true)
         view.delegate = self
         return view
     }()
     
     override func viewDidLoad() {
         super.viewDidLoad()
+        
         
         title = "Dock Finder"
         view.backgroundColor = .white
@@ -181,7 +225,11 @@ class ViewController: UIViewController, MKMapViewDelegate {
             .bind(to: dockCountLabel.rx.text)
             .disposed(by: disposeBag)
 
-       
+        mapViewCenteredLocation
+            .bind { [weak self] location in
+                self?.mapView.setCenter(location?.coordinate ?? CLLocation.plazaMayor.coordinate, animated: true)
+            }
+            .disposed(by: disposeBag)
 
         lastUpdatedLabelText
             .bind(to: updatedLabel.rx.text)
@@ -197,23 +245,47 @@ func talkDockViewModel(
     reloadButtonTapped: Observable<Void>,
     viewDidLoad: Observable<Void>
     ) -> (
-    stationNameLabelText: Observable<String>,
+    stationNameLabelText: Observable<String?>,
     stationDistanceLabelText: Observable<String>,
-    dockCountLabelText: Observable<String>,
-    mapViewCenteredLocation: Observable<CLLocation>,
+    dockCountLabelText: Observable<String?>,
+    mapViewCenteredLocation: Observable<CLLocation?>,
     lastUpdatedLabelText: Observable<String>
     ) {
         
+        let currentLocation = viewDidLoad
+            .flatMapLatest { env.locationManager.location }
         
-        let stationNameLabelText = Observable.just("Locating")
+        let nearbyStations = viewDidLoad
+            .flatMapLatest { currentLocation }
+            .flatMapLatest { env.api.closestStations($0) }
+            .share()
         
-        let stationDistanceLabelText = Observable.just("??")
+        let closestStation = nearbyStations
+            .map { $0.first }
         
-        let dockCountLabelText = Observable.just("-")
+        let stationNameLabelText = closestStation
+            .map { $0?.name }
+            .startWith("Locating..")
         
-        let mapViewCenteredLocation = Observable.just(CLLocation.madrid)
+        let stationDistanceLabelText = closestStation
+            .withLatestFrom(currentLocation) { station,
+                location in
+                "\(Int(station?.location.distance(from: location) ?? 0))m away"
+                }
+            .startWith("??")
         
-        let lastUpdatedLabelText = Observable.just("Last update: Never")
+        let dockCountLabelText = closestStation
+            .map { $0?.docks }
+            .startWith("-")
+        
+        let mapViewCenteredLocation = closestStation
+            .map { $0?.location }
+            .startWith(CLLocation.madrid)
+        
+        
+        let lastUpdatedLabelText = closestStation
+            .map { _ in  "Last update: \(updatedDateFormatter.string(from:  env.date()))" }
+            .startWith("Last update: Never")
         
         return (
             stationNameLabelText: stationNameLabelText,
