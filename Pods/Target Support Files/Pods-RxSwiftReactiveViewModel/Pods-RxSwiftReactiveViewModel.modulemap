@@ -1,0 +1,6 @@
+framework module Pods_RxSwiftReactiveViewModel {
+  umbrella header "Pods-RxSwiftReactiveViewModel-umbrella.h"
+
+  export *
+  module * { export * }
+}
